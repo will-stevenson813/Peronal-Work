@@ -1,0 +1,171 @@
+---
+title: 'ARIMA Models TryIt'
+author: "William Stevenson"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output:
+  html_document:
+    code_folding: hide
+    df_print: paged
+    fig_caption: yes
+    theme: cerulean
+    toc: yes
+    toc_float: no
+  pdf_document:
+    toc: yes
+---
+
+```{r setup, include = FALSE}
+rm(list=ls())
+graphics.off()
+knitr::opts_chunk$set(warning = FALSE, message = FALSE)
+```
+Our task is to model the labor force participation rate for Florida using the ARIMA method and then produce a 5 year ahead forecast. The data are available from FRED as variable “LBSSA12” in seasonally adjusted percent units monthly from January 1976. To avoid having to deal with the COVID-19 period, we will use the data through December 2019 for our analysis.
+
+Load Libararies
+```{r loadLibraries, message=FALSE, include = FALSE}
+require(fpp3)
+require(tidyquant)
+require(stargazer)
+require(kableExtra)
+require(GGally)
+```
+
+## Plotting Data
+
+First, load our retail sales data from FRED.
+```{r Load Retail Data}
+DATA <- setwd("D:/Internship")
+LBSSA12 <- read.csv("LBSSA12.csv")
+LBSSA12 <- LBSSA12%>% 
+  mutate(Month = yearmonth(DATE), value = LBSSA12) %>% 
+  select(-c(DATE,LBSSA12)) %>% 
+  as_tsibble(index = Month)
+
+LBSSA12 <- LBSSA12 %>% 
+  mutate(Year = year(Month))
+```
+
+```{r Plotting Data}
+LBSSA12 %>% 
+  ggplot(aes(x = Month, y = log(value))) +
+  geom_line() +
+  labs(
+    color = "Retail Sales",
+    x = "",
+    y = "(logs of millions of dollars)",
+    title = "Retail Sales and Food Services",
+    caption = "Source: U.S. Census Bureau, Advance Retail Sales, retrieved from FRED, Federal Reserve Bank of St. Louis.",
+    subtitle = "Natural logs of SA"
+  ) 
+
+```
+
+
+## Testing for A Unit Root
+
+Before modeling we should check for nonstationarity in the data using the KPSS unit root test. It appears that there may be 2 unit roots in the data.
+```{r Number of Roots}
+LBSSA12 %>% 
+  features(log(value), unitroot_ndiffs)
+```
+
+
+First test for a single unit root. The null and alternative hypotheses for the KPSS test are:
+ \begin{align*}
+ H_o : y_t  \text{is stationary vs.} H_a : y_t \text{is nonstationary} 
+ \end{align*}
+ 
+```{r Unit Root Test}
+LBSSA12 %>% 
+  features((value), unitroot_kpss)
+```
+The test results indicate that we should reject the null and conclude that we have at least one unit root.
+
+Now we will test for a second unit root. The null and alternative hypotheses are:
+\begin{align*}
+H_o : (1-B)y_t  \text{is stationary vs.} H_a : (1-B)y_t  \text{is nonstationary}
+\end{align*}
+
+```{r First Difference Root Test}
+LBSSA12 %>% 
+  features(difference(value), lag = 1, unitroot_kpss)
+```
+
+```{r Second Root Test}
+LBSSDIF <- LBSSA12 %>% mutate(diff = difference(value))
+LBSSDIF %>% 
+  features(difference(diff), unitroot_kpss)
+```
+
+
+
+
+Again, the low p-value indicates that we should reject the null that the difference of LBSSA12 is stationary so that there are at least 2 unit roots.
+
+Just to be cautious, we will test whether the second difference is stationary. The null and alternative hypotheses are:
+\begin{align*}
+H_o : (1-B)^2y_t \text{is stationary vs.} H_a : (1-B)^2y_t \text{is nonstationary}
+\end{align*}
+
+## Fitting ARIMA model to our data
+We will use the ARIMA command from the fable package to autofit an ARIMA model for our data. Since the data are already seasonally adjusted, we will force the ARIMA function to not consider seasonal terms. Based on our unit root tests, we expect to find d=2.
+
+The estimation results are:
+```{r autoARIMA}
+FIT <- LBSSA12 %>% model(ARIMA(log(value) ~ PDQ(0, 0, 0)))
+report(FIT)
+COEF <- coef(FIT)$estimate
+```
+The estimated model is: 
+$$
+(1-(`r COEF[1]`B)- (`r COEF[2]`)B^2)LBSSA12_t = (1 +(`r COEF[3]`)B)\hat{\varepsilon}_t 
+$$
+
+## Evaluate Fit
+Look at residuals to evalute the fit of the model.
+```{r Residuals}
+FIT %>% gg_tsresiduals()
+```
+
+
+
+There are a couple of very large outliers around January 1990 and January 2010. These data points should be examined to verify that what happened around that period is real and not due to data errors. Otherwise, the residuals appear to have no remaining serial correlation.
+
+Next we use the function gg_arma to make sure that all estimated polynomial inverse roots lie inside the unit circle so that the model is stable.
+
+
+```{r Circles}
+FIT %>% 
+  gg_arma()
+```
+
+
+
+
+Although the ma root is close to 1, the three roots of the estimated model are inside the unit circle so the model is stable.
+
+## Produce a Three Year ahead Forecast
+
+Using our estimated ARIMA model we now produce a 3-year ahead forecast.
+
+```{r Three Year Forecast}
+FIT %>% 
+  forecast(h= 36) %>% 
+  autoplot(level=c(90,95)) +
+  autolayer(LBSSA12, .vars = value)
+```
+
+
+
+The forecast confidence are very wide indicating that we cannot put too much confidence in our forecast. The downward trend in the forecast is the result of the second-difference model. This is, in fact, an unlikely model specification so we should revisit this data using alternative modeling methods.
+
+
+
+
+
+
+
+
+
+
+
